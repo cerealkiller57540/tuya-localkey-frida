@@ -52,6 +52,10 @@ returns the key as a plain string. That's the whole trick.
 
 ## Prerequisites
 
+- **Python 3** (3.8+) on your PC — the scripts here are Python, and `frida` / `tinytuya`
+  install with `pip`. On Windows, grab it from [python.org](https://www.python.org/downloads/)
+  and tick **"Add python.exe to PATH"** in the installer, or run `winget install
+  Python.Python.3.12`; check with `python --version`.
 - An **Android emulator** (AVD), image **Android 14, x86_64, google_apis**. An
   emulator is `su`-able out of the box, which is what frida-server needs — you don't
   have to root a physical phone. ARM-only apps still run via the emulator's ARM
