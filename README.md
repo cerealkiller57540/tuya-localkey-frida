@@ -38,6 +38,9 @@ depending on someone's cloud. That's a legitimate interoperability use.
 - **Never commit the extracted key, device id, or app credentials** to a repo. Every
   example below uses placeholders; keep it that way.
 
+> Not comfortable doing all this by hand? Feed your AI assistant in VS Code these files
+> and let the magic happen.
+
 ---
 
 ## How it works (one paragraph)
