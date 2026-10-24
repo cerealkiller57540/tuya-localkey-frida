@@ -1,0 +1,10 @@
+# Never commit extracted secrets or dump output
+*.key
+*keys*.json
+*localkey*.json
+dump*.json
+*.log
+secrets*
+.env
+__pycache__/
+*.pyc
