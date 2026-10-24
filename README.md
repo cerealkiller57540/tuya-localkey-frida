@@ -239,9 +239,30 @@ python learn_dps.py
 python learn_dps.py --watch
 ```
 
-Because you drive it from the **remote** (no LAN connection of its own), nothing fights
-the script for the device's single local socket. The label table it prints is specific
-to *your* product — the reusable part is the observe-and-diff method, not the numbers.
+**How it connects (and why the remote matters).** `learn_dps.py` talks to the device
+exactly like `verify_lan.py` in step 4 — straight to it on the LAN with `tinytuya`,
+using the same three things from the dump (`DEV_ID`, `DEV_IP`, and `TUYA_KEY` from the
+environment). No cloud is involved. It opens a TCP connection to the device on Tuya's
+local port (6668); the `local_key` encrypts that conversation (protocol 3.3).
+
+The one line that makes it a *listener* rather than a one-shot read is
+`set_socketPersistent(True)`: `verify_lan.py` opens the socket, reads the state once,
+and closes it, whereas `learn_dps.py` holds the connection open. While it stays open,
+the device **pushes** a `dps` message of its own accord every time a setting changes —
+and the script reads those with `d.receive()` and diffs them against the last state it
+saw.
+
+Here's the catch that makes your idea work: a Tuya device accepts **only one local
+connection at a time**, so the script's connection and the vendor app's connection
+can't both be up. Driving the device from its **IR / physical remote** sidesteps this
+completely — the remote uses no LAN socket at all, so it can change settings while the
+script listens, with nothing to fight over. (Operate it from the app instead and you'd
+have to close the app first — at which point you couldn't operate it.)
+
+This assumes the device is reachable directly on your LAN (same subnet, not walled off
+on a guest VLAN) — the normal case for a home Tuya device, and already proven the moment
+`verify_lan.py` got a reply in step 4. The label table the script prints is specific to
+*your* product; the reusable part is the observe-and-diff method, not the numbers.
 
 ### 6. Use it locally, then clean up
 

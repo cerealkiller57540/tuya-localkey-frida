@@ -22,9 +22,17 @@ Two modes:
 
 Requirements:  pip install tinytuya ; export TUYA_KEY=...  (never hard-code it)
 
-ONE local connection at a time: a Tuya device accepts a single local socket. Use
-the IR/physical remote (no LAN connection) while this runs, or close the vendor
-app first — otherwise the app and this script fight over the device.
+How it connects: same as verify_lan.py — straight to the device on the LAN via
+tinytuya, using DEV_ID, DEV_IP and the key from the environment. No cloud. It opens
+a TCP socket to the device on Tuya's local port (6668), encrypted with the local_key.
+The one difference from verify_lan.py is set_socketPersistent(True) below: instead of
+a single status() read, it holds the socket open so the device's spontaneous pushes
+keep arriving, and reads them with d.receive().
+
+ONE local connection at a time: a Tuya device accepts a single local socket, so this
+script and the vendor app can't both be connected. Drive the device from its
+IR/physical remote (which uses no LAN socket) while this runs; if you use the app
+instead, close it first — otherwise the two fight over the device.
 """
 import os
 import sys
