@@ -218,22 +218,30 @@ In PowerShell the env var is set differently: `$env:TUYA_KEY = '<the local key>'
 A `{'dps': {...}}` dict means success. `Error 905` almost always means a wrong key or
 the wrong protocol `version` (try `3.4` / `3.5` if `3.3` fails).
 
-### 5. (Method, not solution) Map the DPS
+### 5. (Method, not solution) Map the DPS — by watching, not writing
 
 Tuya reports device state as numbered **DPS** (data points) with no vendor
-documentation: `{'1': True, '2': 24, '4': 'hot', ...}`. To learn what each one does,
-change one, read the whole state back, see what moved, and restore it —
-[`probe_dps.py`](probe_dps.py) does exactly that in a safe apply/read/restore loop:
+documentation: `{'1': True, '2': 24, '4': 'hot', ...}`. You *could* write guessed
+values from the PC, but that means guessing each one's type and range and can push the
+device into a bad state. The safer method is **observation**: the device pushes a dps
+update whenever a setting changes — *including when the change comes from the IR/physical
+remote or the app* — so you operate it the normal way and watch which number moved.
+[`learn_dps.py`](learn_dps.py) listens and does exactly that:
 
 ```bash
-python probe_dps.py 1 true        # a boolean dps
-python probe_dps.py 2 24          # an integer (e.g. a setpoint)
-python probe_dps.py 4 '"cool"'    # a string enum — JSON, so quote it
+# interactive: label an action, perform it, see what moved — builds the table for you
+python learn_dps.py
+#   label> temp +1
+#     do 'temp +1' now, then press Enter...
+#     -> moved: {'2': (24, 25)}        # dps 2 is the setpoint
+
+# or just stream every change with a timestamp (Ctrl-C to stop)
+python learn_dps.py --watch
 ```
 
-Watch the device while you do it (display, a beep, a vent moving) and write down what
-each DPS and each enum value means. That label table is specific to *your* product —
-the reusable part is the probing method, not the numbers.
+Because you drive it from the **remote** (no LAN connection of its own), nothing fights
+the script for the device's single local socket. The label table it prints is specific
+to *your* product — the reusable part is the observe-and-diff method, not the numbers.
 
 ### 6. Use it locally, then clean up
 
@@ -253,7 +261,7 @@ the cloud. Then:
 | --- | --- |
 | [`dump_localkey.py`](dump_localkey.py) | The Frida script: hooks `*DeviceBean`, prints id / name / `local_key` / ip. |
 | [`verify_lan.py`](verify_lan.py) | Confirms the key by reading device state over the LAN with `tinytuya`. |
-| [`probe_dps.py`](probe_dps.py) | Apply / read / restore loop to reverse-engineer what each DPS does. |
+| [`learn_dps.py`](learn_dps.py) | Listens for dps changes while you operate the device from its remote, to learn what each DPS means. |
 
 ## A note on stability
 
