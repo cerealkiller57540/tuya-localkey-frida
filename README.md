@@ -89,13 +89,12 @@ This whole thing runs fine on Windows — nothing here needs a Linux box. A few 
 that the steps take for granted:
 
 - **AVD / emulator** — the **Android Virtual Device**, a phone that runs as a window on
-  your PC. It ships with **Android Studio** (free). In Android Studio: *More Actions →
-  Virtual Device Manager → Create device*, pick any phone, and for the system image
-  choose **Android 14, x86_64, "Google APIs"** (the plain *Google APIs* image, **not**
-  "Google Play" — the Play image locks out `su`, which you need). `emulator` and `adb`
-  are then under `%LOCALAPPDATA%\Android\Sdk\platform-tools\` and
-  `...\emulator\`; add those two folders to your `PATH` so the commands below work from
-  any terminal.
+  your PC. You get it either from **Android Studio** (free, big GUI) or from the SDK
+  command-line tools alone (smaller, scripted). Whichever route, use the system image
+  **Android 14, x86_64, "Google APIs"** — the plain *Google APIs* image, **not** "Google
+  Play", because the Play image locks out `su`, which you need. Starting from nothing?
+  Follow **"From zero on Windows (PowerShell)"** just below — it installs everything and
+  creates the AVD for you.
 - **`adb`** — *Android Debug Bridge*, the command-line cable between your PC and the
   phone/emulator. `adb push` copies a file onto the device, `adb shell` runs a command
   on it, `adb install` sideloads an APK.
@@ -108,6 +107,71 @@ that the steps take for granted:
   package on your PC. Download the one matching your host `frida` version (16.x) and the
   emulator's architecture (`x86_64`) from Frida's GitHub releases, and un-`.xz` it first
   (7-Zip opens `.xz`).
+
+### From zero on Windows (PowerShell): install the SDK and make an AVD
+
+No Android Studio, nothing installed? This gets you from a bare Windows box to a running
+emulator, entirely in **PowerShell** (the blue terminal — press `Win`, type *PowerShell*,
+Enter). Copy each block as-is. It installs into `C:\Android` to keep paths simple.
+
+**1. Java.** The SDK tools need a JDK. If `java -version` prints nothing, install one
+(`winget install Microsoft.OpenJDK.17`) and reopen PowerShell.
+
+**2. Download the command-line tools** and lay them out the way `sdkmanager` insists on
+(it must live in `cmdline-tools\latest\`):
+
+```powershell
+$SDK = "C:\Android"
+New-Item -ItemType Directory -Force "$SDK\cmdline-tools" | Out-Null
+# Grab "Command line tools only" for Windows from https://developer.android.com/studio#command-line-tools-only
+# (the .zip near the bottom of that page), then point $zip at your download:
+$zip = "$HOME\Downloads\commandlinetools-win-latest.zip"
+Expand-Archive $zip "$SDK\cmdline-tools" -Force
+# the zip unpacks to a folder called "cmdline-tools" — rename it to "latest":
+Rename-Item "$SDK\cmdline-tools\cmdline-tools" "latest"
+```
+
+You should now have `C:\Android\cmdline-tools\latest\bin\sdkmanager.bat`.
+
+**3. Install the pieces** — platform tools (`adb`), the emulator, and the exact image
+this guide needs (**Android 14 = API 34, `google_apis`, `x86_64`** — the `google_apis`
+image, *not* `google_apis_playstore`, because Play Store images block `su`):
+
+```powershell
+$mgr = "$SDK\cmdline-tools\latest\bin\sdkmanager.bat"
+& $mgr --sdk_root=$SDK "platform-tools" "emulator" "platform-tools" `
+       "system-images;android-34;google_apis;x86_64"
+& $mgr --sdk_root=$SDK --licenses     # press y at each prompt
+```
+
+**4. Put `adb` and `emulator` on your PATH** so the commands in the steps below just work,
+in this window and in every new one:
+
+```powershell
+# this window, right now:
+$env:Path = "$SDK\platform-tools;$SDK\emulator;$env:Path"
+# and permanently, for future windows (then reopen PowerShell once):
+setx Path "$SDK\platform-tools;$SDK\emulator;$([Environment]::GetEnvironmentVariable('Path','User'))"
+```
+
+Check both resolve: `adb --version` and `emulator -version` should each print something.
+
+**5. Create the AVD** — a virtual phone using that image. Name it `tuya_avd` (the steps
+below use that name):
+
+```powershell
+$avd = "$SDK\cmdline-tools\latest\bin\avdmanager.bat"
+& $avd create avd -n tuya_avd -k "system-images;android-34;google_apis;x86_64" -d pixel_6
+# "Do you wish to create a custom hardware profile?" -> just press Enter (no)
+emulator -list-avds        # should print: tuya_avd
+```
+
+That's the one-time setup. From here, **Step 1** starts that AVD and everything follows.
+
+> Already have Android Studio? Then the SDK is at `%LOCALAPPDATA%\Android\Sdk` instead of
+> `C:\Android` — add *its* `platform-tools` and `emulator` folders to your PATH (step 4),
+> make the AVD from *Device Manager → Create device* (same image: Android 14, x86_64,
+> **Google APIs**), and skip the rest of this section.
 
 ### Which terminal — and the `MSYS_NO_PATHCONV` thing
 
@@ -136,31 +200,48 @@ In **PowerShell or WSL this problem doesn't exist**, so drop the prefix there.
 
 ### 1. Start the emulator and frida-server
 
-```bash
-# Start the AVD (headless-ish, modest resources — don't starve your workstation):
-emulator -avd <your_avd> -gpu swiftshader_indirect -cores 4 -memory 4096
+Pick **one** shell and use its block — don't mix lines from both. If you followed the
+PowerShell setup above, use the PowerShell block. First, the file you need on hand:
+**frida-server for Android**, the **16.x** build matching your host `frida` and the `x86_64`
+architecture (from [Frida's releases](https://github.com/frida/frida/releases) — the
+`frida-server-16.*-android-x86_64.xz`; un-`.xz` it with 7-Zip so you have a plain
+`frida-server` file). Run these from the folder that file is in.
 
-# Push and launch frida-server (download the build matching your host frida 16.x).
+**PowerShell** (keep frida-server in its own window so it stays alive):
+
+```powershell
+# Start the AVD (modest resources — don't starve your workstation). This window stays
+# busy running the emulator; open a NEW PowerShell window for the adb lines below.
+emulator -avd tuya_avd -gpu swiftshader_indirect -cores 4 -memory 4096
+
+# --- in a second PowerShell window: ---
+adb wait-for-device                                    # wait until the phone is up
+adb push frida-server /data/local/tmp/frida-server
+adb shell "su 0 chmod 755 /data/local/tmp/frida-server"
+Start-Process adb -ArgumentList 'shell','su 0 /data/local/tmp/frida-server'  # its own window
+adb forward tcp:27042 tcp:27042                        # frida port -> 127.0.0.1:27042
+```
+
+<details><summary><b>Git Bash / WSL</b> (same thing, Bash syntax) — click to expand</summary>
+
+```bash
 # MSYS_NO_PATHCONV=1 is a Git Bash workaround (see "For Windows users" above); drop it
-# in PowerShell or WSL.
+# in WSL (and it's harmless there anyway).
+emulator -avd tuya_avd -gpu swiftshader_indirect -cores 4 -memory 4096
+
+# --- in a second terminal: ---
+adb wait-for-device
 MSYS_NO_PATHCONV=1 adb push frida-server /data/local/tmp/frida-server
 MSYS_NO_PATHCONV=1 adb shell "su 0 chmod 755 /data/local/tmp/frida-server"
 MSYS_NO_PATHCONV=1 adb shell "su 0 /data/local/tmp/frida-server &"
-
-# Make the device's frida port reachable at 127.0.0.1:27042 on the host:
 adb forward tcp:27042 tcp:27042
 ```
 
-The exact same thing in **PowerShell** (no `MSYS_NO_PATHCONV`, and keep frida-server in
-its own window so it stays alive):
+</details>
 
-```powershell
-emulator -avd <your_avd> -gpu swiftshader_indirect -cores 4 -memory 4096
-adb push frida-server /data/local/tmp/frida-server
-adb shell "su 0 chmod 755 /data/local/tmp/frida-server"
-Start-Process adb -ArgumentList 'shell','su 0 /data/local/tmp/frida-server'
-adb forward tcp:27042 tcp:27042
-```
+Quick sanity check that the PC can see the device's Frida: `frida-ps -U` should list the
+emulator's running apps. Empty list or an error → frida-server isn't running as root, or
+you're on frida 17 (see the pin above).
 
 ### 2. Install the vendor app and log in
 
