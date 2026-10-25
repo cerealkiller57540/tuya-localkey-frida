@@ -81,6 +81,19 @@ Use **`frida` 16.x** on the host (`pip install "frida==16.*"`) with a matching
 17, you now have to add the external `frida-java-bridge` yourself; pinning 16 is far
 less trouble for a one-off extraction.)
 
+A subtler trap, if you installed 16 into a **virtualenv**: running plain `python`
+(or `python3`) can still pick up a system-wide frida 17 instead of your venv's 16, and
+then the dump fails with a cryptic `frida.ProtocolError: unable to communicate with
+remote frida-server … major versions match`. That error *is* the version mismatch.
+Confirm which frida you're actually running before you dump:
+
+```bash
+python -c "import frida; print(frida.__version__)"   # must print 16.x
+```
+
+If it prints 17, activate your venv (or call its python by full path). `dump_localkey.py`
+also checks this itself and exits early with a clear message rather than that traceback.
+
 ---
 
 ## For Windows users (no Linux background needed)
@@ -261,6 +274,11 @@ the app's visible process name:
 ```bash
 python dump_localkey.py "<App display name>"
 ```
+
+The script re-posts the `adb forward` for the frida port itself (removing any stale
+one first), so you can re-run it as often as you like without the `Address already in
+use` you'd get from setting the forward twice by hand. If you'd rather manage the
+forward yourself, add `--no-adb`.
 
 You'll get the list of `*DeviceBean` classes it found, then a row per live device:
 

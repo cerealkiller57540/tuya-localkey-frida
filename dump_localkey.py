@@ -22,21 +22,70 @@ Usage:
 import sys
 import json
 import time
+import subprocess
 
 import frida  # pip install "frida==16.*"  (NOT 17 — see README)
 
-APP_NAME = sys.argv[1] if len(sys.argv) > 1 else None
+# Fail loud on frida 17+. It dropped the bundled Java bridge, so talking to a
+# 16.x frida-server fails with a cryptic "unable to communicate ... major versions
+# match" ProtocolError (or Java.perform is simply missing). Catch it here with a
+# message that points at the actual fix instead of letting it surface deep in a
+# traceback. The most common cause: running the system `python` instead of the
+# venv where you pip-installed frida 16.
+_major = int(frida.__version__.split(".")[0])
+if _major >= 17:
+    sys.exit(
+        f"frida {frida.__version__} on this PC — too new.\n"
+        "It can't talk to the frida-server 16.x on the emulator (the Java bridge\n"
+        "was removed in 17). Use the Python where you ran `pip install \"frida==16.*\"`.\n"
+        "Check with:  python -c \"import frida; print(frida.__version__)\"  -> must be 16.x"
+    )
+
+ARGS = [a for a in sys.argv[1:] if a != "--no-adb"]
+NO_ADB = "--no-adb" in sys.argv
+APP_NAME = ARGS[0] if ARGS else None
 if not APP_NAME:
-    sys.exit("usage: python dump_localkey.py \"<App display name>\"")
+    sys.exit("usage: python dump_localkey.py \"<App display name>\" [--no-adb]")
+
+PORT = 27042
+
+
+def reset_adb_forward():
+    """Re-post the adb forward idempotently so re-runs don't hit 'Address already
+    in use'. A leftover forward from a previous run (or a second frida-server) is
+    the usual reason a repeat of this step errors out, so we clear it first, then
+    set it fresh. adb is taken from PATH. Pass --no-adb if you manage it yourself."""
+    def adb(*a):
+        # DEVNULL: --remove is noisy when nothing is there, and that's fine.
+        return subprocess.run(["adb", *a],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        adb("forward", "--remove", f"tcp:{PORT}")          # ok if it wasn't set
+        if adb("forward", f"tcp:{PORT}", f"tcp:{PORT}").returncode != 0:
+            print(f"warning: 'adb forward tcp:{PORT}' failed — is the emulator up "
+                  f"and frida-server running? (or pass --no-adb)", file=sys.stderr)
+    except FileNotFoundError:
+        print("warning: adb not on PATH — skipping forward. Make sure 127.0.0.1:"
+              f"{PORT} already reaches frida-server, or run with --no-adb.",
+              file=sys.stderr)
+
+
+if not NO_ADB:
+    reset_adb_forward()
 
 # frida-server on the device, reached over the adb-forwarded port.
-dev = frida.get_device_manager().add_remote_device("127.0.0.1:27042")
+dev = frida.get_device_manager().add_remote_device(f"127.0.0.1:{PORT}")
 
 # Match the process by its visible name. enumerate_processes() lists what's running;
-# the app has to be started and in the foreground for this to find it.
-matches = [p.pid for p in dev.enumerate_processes() if p.name == APP_NAME]
+# the app has to be started and in the foreground for this to find it. The match is
+# case-insensitive and ignores surrounding spaces, so "smart life" finds the app
+# shown as "Smart Life" — p.name is frida's string, not a filename, so == would
+# otherwise be exact.
+procs = dev.enumerate_processes()
+want = APP_NAME.strip().casefold()
+matches = [p.pid for p in procs if p.name.strip().casefold() == want]
 if not matches:
-    running = sorted({p.name for p in dev.enumerate_processes()})
+    running = sorted({p.name for p in procs})
     sys.exit(f"process {APP_NAME!r} not found. Running processes:\n  " + "\n  ".join(running))
 pid = matches[0]
 
