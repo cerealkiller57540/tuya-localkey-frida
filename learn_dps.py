@@ -40,10 +40,21 @@ import time
 import tinytuya
 
 DEV_ID = "<DEV_ID_FROM_DUMP>"
-DEV_IP = "<DEVICE_LAN_IP>"
+DEV_IP = "<DEVICE_LAN_IP>"     # the device's LAN IP (192.168.x.x), NOT the dump's getIp
 VERSION = 3.3                 # try 3.4 / 3.5 if 3.3 fails
 
 WATCH = "--watch" in sys.argv
+
+
+def need(value, env, prompt):
+    """Resolve from an explicit value, then an env var, then an interactive prompt.
+    A '<placeholder>' counts as unset, so an un-filled default triggers the prompt."""
+    if value and not value.startswith("<"):
+        return value
+    env_val = os.environ.get(env)
+    if env_val:
+        return env_val
+    return input(prompt).strip()
 
 
 def diff(old, new):
@@ -52,7 +63,12 @@ def diff(old, new):
 
 
 def connect():
-    d = tinytuya.Device(DEV_ID, DEV_IP, os.environ["TUYA_KEY"], version=VERSION)
+    # Same three values as verify_lan.py; each falls back to an env var, then a prompt,
+    # so TUYA_KEY/DEV_ID/DEV_IP all work and nothing has to be hard-coded or committed.
+    dev_id = need(DEV_ID, "DEV_ID", "Device id (getDevId from the dump): ")
+    dev_ip = need(DEV_IP, "DEV_IP", "Device LAN IP (192.168.x.x, NOT the dump's getIp): ")
+    key = need(None, "TUYA_KEY", "Local key (getLocalKey): ")
+    d = tinytuya.Device(dev_id, dev_ip, key, version=VERSION)
     d.set_socketPersistent(True)   # keep the socket open so pushes arrive
     return d
 

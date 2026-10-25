@@ -307,28 +307,42 @@ the right device when you have several.
 ### 4. Verify it works, locally
 
 Confirm the key against the device on the LAN with no cloud in the loop, using
-[`verify_lan.py`](verify_lan.py):
+[`verify_lan.py`](verify_lan.py). It needs three things from the dump — the **device
+id**, the device's **LAN IP**, and the **local key** — and just asks for whatever you
+haven't supplied, so the simplest way is to run it and answer the prompts:
 
-Set the key as an environment variable (keep it out of the script), then run. Use the
-line for **your** shell — `export` is Bash; PowerShell uses `$env:`:
+```bash
+python verify_lan.py
+#   Device id (getDevId from the dump): bfxxxxxxxxxxxxxxxx
+#   Device LAN IP (192.168.x.x, NOT the dump's getIp): 192.168.1.42
+#   Local key (getLocalKey): ****
+```
+
+🔴 **The IP is the trap.** `getIp` in the dump is often your **public** IP, not the
+device's address on your network — connecting to it gives `Err 901, Unable to Connect`.
+Use the `192.168.x.x` the device has on your LAN (your router's client list, or your
+smart-home hub, shows it next to its MAC).
+
+Prefer not to be prompted? Each value also reads from an arg or an env var — handy to
+keep the key out of your shell history. `export` is Bash; PowerShell uses `$env:`, and
+single quotes matter because a `local_key` is full of `{ } # ( >` (PowerShell leaves a
+single-quoted string alone; double quotes would expand `$` and `` ` ``):
 
 ```bash
 # Bash / macOS / Linux / Git Bash
 export TUYA_KEY='<the local key>'
-python verify_lan.py
+python verify_lan.py <DEV_ID> <DEV_IP>
 ```
 
 ```powershell
 # PowerShell (Windows default)
 $env:TUYA_KEY = '<the local key>'
-python verify_lan.py
+python verify_lan.py <DEV_ID> <DEV_IP>
 ```
 
-Single quotes matter: a `local_key` is full of `{ } # ( >`, and PowerShell leaves a
-single-quoted string untouched while double quotes would try to expand `$` and `` ` ``.
-
 A `{'dps': {...}}` dict means success. `Error 905` almost always means a wrong key or
-the wrong protocol `version` (try `3.4` / `3.5` if `3.3` fails).
+the wrong protocol `version` (try `3.4` / `3.5` if `3.3` fails); `Err 901` is a network
+problem — wrong IP (see above), or the device is on a VLAN your PC can't reach.
 
 ### 5. (Method, not solution) Map the DPS — by watching, not writing
 
