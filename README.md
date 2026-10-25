@@ -309,13 +309,23 @@ the right device when you have several.
 Confirm the key against the device on the LAN with no cloud in the loop, using
 [`verify_lan.py`](verify_lan.py):
 
+Set the key as an environment variable (keep it out of the script), then run. Use the
+line for **your** shell — `export` is Bash; PowerShell uses `$env:`:
+
 ```bash
-export TUYA_KEY='<the local key>'   # from the dump; keep it out of the script
+# Bash / macOS / Linux / Git Bash
+export TUYA_KEY='<the local key>'
 python verify_lan.py
 ```
 
-In PowerShell the env var is set differently: `$env:TUYA_KEY = '<the local key>'`, then
-`python verify_lan.py`.
+```powershell
+# PowerShell (Windows default)
+$env:TUYA_KEY = '<the local key>'
+python verify_lan.py
+```
+
+Single quotes matter: a `local_key` is full of `{ } # ( >`, and PowerShell leaves a
+single-quoted string untouched while double quotes would try to expand `$` and `` ` ``.
 
 A `{'dps': {...}}` dict means success. `Error 905` almost always means a wrong key or
 the wrong protocol `version` (try `3.4` / `3.5` if `3.3` fails).
@@ -328,7 +338,9 @@ values from the PC, but that means guessing each one's type and range and can pu
 device into a bad state. The safer method is **observation**: the device pushes a dps
 update whenever a setting changes — *including when the change comes from the IR/physical
 remote or the app* — so you operate it the normal way and watch which number moved.
-[`learn_dps.py`](learn_dps.py) listens and does exactly that:
+[`learn_dps.py`](learn_dps.py) listens and does exactly that. It reads `TUYA_KEY` from
+the environment just like step 4, so set it again if you opened a new terminal (`export
+TUYA_KEY='...'` in Bash, `$env:TUYA_KEY = '...'` in PowerShell):
 
 ```bash
 # interactive: label an action, perform it, see what moved — builds the table for you
