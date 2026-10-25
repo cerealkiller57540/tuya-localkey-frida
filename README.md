@@ -349,12 +349,12 @@ problem — wrong IP (see above), or the device is on a VLAN your PC can't reach
 Tuya reports device state as numbered **DPS** (data points) with no vendor
 documentation: `{'1': True, '2': 24, '4': 'hot', ...}`. You *could* write guessed
 values from the PC, but that means guessing each one's type and range and can push the
-device into a bad state. The safer method is **observation**: the device pushes a dps
-update whenever a setting changes — *including when the change comes from the IR/physical
-remote or the app* — so you operate it the normal way and watch which number moved.
-[`learn_dps.py`](learn_dps.py) listens and does exactly that. It reads `TUYA_KEY` from
-the environment just like step 4, so set it again if you opened a new terminal (`export
-TUYA_KEY='...'` in Bash, `$env:TUYA_KEY = '...'` in PowerShell):
+device into a bad state. The safer method is **observation**: most Tuya devices push a
+dps update whenever a setting changes — *including, on many of them, when the change
+comes from the app or a companion controller* — so you operate it the normal way and
+watch which number moved. [`learn_dps.py`](learn_dps.py) listens and does exactly that.
+It reads `TUYA_KEY` from the environment just like step 4, so set it again if you opened
+a new terminal (`export TUYA_KEY='...'` in Bash, `$env:TUYA_KEY = '...'` in PowerShell):
 
 ```bash
 # interactive: label an action, perform it, see what moved — builds the table for you
@@ -380,21 +380,42 @@ the device **pushes** a `dps` message of its own accord every time a setting cha
 and the script reads those with `d.receive()` and diffs them against the last state it
 saw.
 
-Here's the catch that makes your idea work: a Tuya device accepts **only one local
-connection at a time**, so the script's connection and the vendor app's connection
-can't both be up. Driving the device from its **IR / physical remote** sidesteps this
-completely — the remote uses no LAN socket at all, so it can change settings while the
-script listens, with nothing to fight over. (Operate it from the app instead and you'd
-have to close the app first — at which point you couldn't operate it.)
+Here's the catch that makes this work: a Tuya device accepts **only one local
+connection at a time**, so this script can't be listening while the vendor app — or an
+integration like Home Assistant's `tuya_local` — already holds a local connection to the
+same device. Close the app and stop (or disable) any integration bound to that device
+first, or the script connects, reads one frozen baseline, and then never sees another
+update. Drive the change from a source that *does* reach the Tuya module: the app on
+another connection is out (it'd take the socket), so the clean options are a wall panel,
+the device's own buttons, or writing to a dps from the PC (next paragraph).
 
-This assumes the device is reachable directly on your LAN (same subnet, not walled off
-on a guest VLAN) — the normal case for a home Tuya device, and already proven the moment
-`verify_lan.py` got a reply in step 4. The label table the script prints is specific to
-*your* product; the reusable part is the observe-and-diff method, not the numbers.
+> **Nothing moves when you change a setting?** Two common reasons, both expected:
+>
+> - **The device doesn't push.** Some firmwares (several AC/climate modules especially)
+>   never send a spontaneous update — `--watch` just sits on a frozen baseline no matter
+>   what you do. These you **poll** instead: read `status()` on a short loop and diff. A
+>   ready-made `poll_dps.py` isn't in this repo, but it's ten lines around
+>   `tinytuya.Device(...).status()` in a `while True: time.sleep(1)`.
+> - **An IR/RF remote is "blind."** A remote that talks to the *appliance* over infrared
+>   (not to the Tuya Wi-Fi module) can change what the unit does without the Tuya module
+>   ever learning about it — so neither `--watch` nor polling sees a thing. Change the
+>   setting through the Tuya module itself (app on its own connection, or a PC write).
+
+If observation gives you nothing on your device, **writing one value from the PC** is the
+fallback: `tinytuya.Device(id, ip, key, version=3.3).set_value(2, 25)` sets dps 2 to 25
+and you watch whether the unit reacts. Nudge one dps at a time, by one step, and set it
+straight back — this *does* write to the device, so it carries a small risk of leaving it
+in an odd state, which pure observation doesn't.
+
+All of this assumes the device is reachable directly on your LAN (same subnet, not walled
+off on a guest VLAN) — the normal case for a home Tuya device, and already proven the
+moment `verify_lan.py` got a reply in step 4. The label table you end up with is specific
+to *your* product; the reusable part is the method (observe first, poll or write only if
+you must), not the numbers.
 
 ### 6. Turn the table into a device config
 
-So you've watched the remote and you have a table: dps 1 is on/off, dps 2 is the
+So you've watched the device and you have a table: dps 1 is on/off, dps 2 is the
 setpoint, dps 4 is the mode, and so on. **Now what?** That table *is* the device
 config — you just write it down in the shape your integration expects. For Home
 Assistant's [`tuya_local`](https://github.com/make-all/tuya-local) that's a small YAML
