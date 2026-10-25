@@ -267,11 +267,86 @@ on a guest VLAN) — the normal case for a home Tuya device, and already proven 
 `verify_lan.py` got a reply in step 4. The label table the script prints is specific to
 *your* product; the reusable part is the observe-and-diff method, not the numbers.
 
-### 6. Use it locally, then clean up
+### 6. Turn the table into a device config
 
-Point a local integration at the device with the key — e.g. Home Assistant's
-[`tuya_local`](https://github.com/make-all/tuya-local) or LocalTuya — and you're off
-the cloud. Then:
+So you've watched the remote and you have a table: dps 1 is on/off, dps 2 is the
+setpoint, dps 4 is the mode, and so on. **Now what?** That table *is* the device
+config — you just write it down in the shape your integration expects. For Home
+Assistant's [`tuya_local`](https://github.com/make-all/tuya-local) that's a small YAML
+file, one entry per dps, each saying what the number *is* (a boolean? a temperature? a
+mode name?) and, where the raw value isn't obvious, how it maps to a human value.
+
+Here's a **generic** heat/cool unit. The values are placeholders that show the shape —
+replace them with the numbers from *your own* `learn_dps` table:
+
+```yaml
+name: Generic AC
+products:
+  - id: xxxxxxxxxxxxxxxx          # the productId from the Frida dump (optional, see below)
+    manufacturer: Example
+    model: Generic AC
+entities:
+  - entity: climate
+    dps:
+      - id: 1                     # learn_dps said: power on/off
+        type: boolean
+        name: hvac_mode
+        mapping:
+          - dps_val: false
+            value: "off"
+          - dps_val: true
+            constraint: mode       # pair on/off with dps 4 to pick heat vs cool…
+            conditions:
+              - dps_val: cold
+                value: cool
+              - dps_val: hot
+                value: heat
+      - id: 2                     # learn_dps said: temp +1 moved this 24 -> 25
+        type: integer
+        name: temperature
+        range:
+          min: 16
+          max: 30
+      - id: 3                     # learn_dps said: reads room temp, moves on its own
+        type: integer
+        name: current_temperature
+        mapping:
+          - scale: 10             # device sends 235 -> means 23.5 °C
+      - id: 4                     # learn_dps said: mode button cycled cold/hot/wind
+        type: string
+        name: mode
+        hidden: true              # drives the mapping above; no entity of its own
+```
+
+The three dps types you'll use most: **boolean** (on/off, a switch), **integer** (a
+temperature, a timer, a percentage — often with a `range:` and a `scale:` when the device
+multiplies by 10 or 100), and **string** (a named mode like `cold`/`hot`/`auto`, which you
+remap to the words the integration wants). A `mapping:` is just a lookup table from the
+raw dps value to a friendly one; `constraint:` links two dps together when the real
+setting needs both (on/off *and* mode = "cool" vs "heat").
+
+Drop the file in `custom_components/tuya_local/devices/` and restart Home Assistant, then
+add the integration (configure it manually by IP, since you're not using the cloud). You
+won't type the product id anywhere: the integration **matches the file by its dps
+signature** — it offers you a device-type list, and your config appears because the dps
+ids and *types* you declared are the ones the device actually reports. The `products:`
+block is just a bonus hint. So the catch is there: get a `type:` wrong and your file
+silently drops off the list. If it's missing, or a control does nothing once added, that
+dps is mislabeled — go back to `learn_dps.py`, move that one setting, and fix the number
+or the type.
+
+> That same table works for **LocalTuya** too (it asks you, per dps, "is this a switch, a
+> number, a select?" in its config flow) and for a plain `tinytuya` script
+> (`d.set_value(2, 25)` to set dps 2 to 25). The device config is the portable part.
+>
+> ⚠️ A file under `custom_components/` is **overwritten when the integration updates**.
+> Keep a copy somewhere safe and drop it back after an update — or, better, open a PR to
+> [make-all/tuya-local](https://github.com/make-all/tuya-local) so your device ships with
+> the integration and everyone with that model gets it for free.
+
+### 7. Use it locally, then clean up
+
+You're off the cloud now. Last thing — don't leave the key lying around:
 
 - **Delete any file that held the key in cleartext** (dump output, scratch JSON).
 - Store the key in a password/secret manager, not in a dotfile next to your configs.
@@ -283,7 +358,7 @@ the cloud. Then:
 
 | File | What it is |
 | --- | --- |
-| [`dump_localkey.py`](dump_localkey.py) | The Frida script: hooks `*DeviceBean`, prints id / name / `local_key` / ip. |
+| [`dump_localkey.py`](dump_localkey.py) | The Frida script: hooks `*DeviceBean`, prints id / name / `local_key` / productId / ip. |
 | [`verify_lan.py`](verify_lan.py) | Confirms the key by reading device state over the LAN with `tinytuya`. |
 | [`learn_dps.py`](learn_dps.py) | Listens for dps changes while you operate the device from its remote, to learn what each DPS means. |
 
