@@ -350,10 +350,16 @@ $env:TUYA_KEY = '<the local key>'
 python verify_lan.py <DEV_ID> <DEV_IP>
 ```
 
-A `{'dps': {...}}` dict means success. `Error 905` almost always means a wrong key or
-the wrong protocol version (default `3.3`; retry with `--version 3.4` or `--version 3.5`,
-or set `TUYA_VERSION`); `Err 901` is a network
-problem — wrong IP (see above), or the device is on a VLAN your PC can't reach.
+`OK, the key works. dps = {...}` means success (exit code 0). Otherwise the script names
+tinytuya's error code and what it usually means here (exit code 1):
+
+| Code | Usually |
+| --- | --- |
+| `Err 914` | Wrong key or wrong protocol version: re-check the key, then `--version 3.4` / `3.5` (default `3.3`, or set `TUYA_VERSION`). |
+| `Err 904` | Reply couldn't be decoded: usually the wrong `--version`. |
+| `Err 901` | Can't connect: wrong IP (see above), device off, or the app / an integration already holds its one local connection. |
+| `Err 905` | Nothing reachable at that address: wrong IP, or a VLAN your PC can't reach. |
+| `Err 902` | Connected, no answer: retry, then try another `--version`. |
 
 ### 5. (Method, not solution) Map the DPS — by watching, not writing
 
@@ -522,7 +528,8 @@ You're off the cloud now. Last thing — don't leave the key lying around:
 | --- | --- |
 | [`dump_localkey.py`](dump_localkey.py) | The Frida script: hooks `*DeviceBean`, prints id / name / `local_key` / productId / ip. |
 | [`verify_lan.py`](verify_lan.py) | Confirms the key by reading device state over the LAN with `tinytuya`. |
-| [`learn_dps.py`](learn_dps.py) | Listens for dps changes while you operate the device from its remote, to learn what each DPS means. |
+| [`learn_dps.py`](learn_dps.py) | Watches dps changes (pushes, or `--poll`) while you operate the device, to learn what each DPS means. Imports helpers from `verify_lan.py`, so keep both in the same folder. |
+| [`tests/`](tests/) | Unit tests for the helper logic (dedup, `diff`, env resolution, error/incomplete replies). No device needed: `python -m unittest discover -s tests -v`. The dedup test runs the dump's JS under Node and is skipped without it. |
 
 ## A note on stability
 
