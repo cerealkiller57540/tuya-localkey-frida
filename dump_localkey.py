@@ -15,13 +15,14 @@ Requirements (read the README for the WHY, especially the Frida version pin):
   - adb forward tcp:27042 tcp:27042   (so 127.0.0.1:27042 reaches the device)
 
 Usage:
-  python dump_localkey.py "<App display name>"
+  python dump_localkey.py "<App display name or package id>"
       e.g. python dump_localkey.py "Smart Life"
+           python dump_localkey.py com.tuya.smartlife
   The app must be in the FOREGROUND and logged in (devices visible) first.
 """
 import sys
 import json
-import time
+import threading
 import subprocess
 
 import frida  # pip install "frida==16.*"  (NOT 17 — see README)
@@ -76,24 +77,42 @@ if not NO_ADB:
 # frida-server on the device, reached over the adb-forwarded port.
 dev = frida.get_device_manager().add_remote_device(f"127.0.0.1:{PORT}")
 
-# Match the process by its visible name. enumerate_processes() lists what's running;
-# the app has to be started and in the foreground for this to find it. The match is
-# case-insensitive and ignores surrounding spaces, so "smart life" finds the app
-# shown as "Smart Life" — p.name is frida's string, not a filename, so == would
-# otherwise be exact.
-procs = dev.enumerate_processes()
+# Find the app's MAIN process. enumerate_applications() gives one pid per installed
+# app (0 = not running), which is the process that loads the DeviceBeans. Matching on
+# enumerate_processes() alone can pick a side process (":push", ":remote"...) and the
+# dump then comes back empty with no error. Match is case-insensitive on the visible
+# name or the package id.
 want = APP_NAME.strip().casefold()
-matches = [p.pid for p in procs if p.name.strip().casefold() == want]
-if not matches:
-    running = sorted({p.name for p in procs})
-    sys.exit(f"process {APP_NAME!r} not found. Running processes:\n  " + "\n  ".join(running))
-pid = matches[0]
+apps = [a for a in dev.enumerate_applications()
+        if want in (a.name.strip().casefold(), a.identifier.casefold())]
+running = [a for a in apps if a.pid]
+if running:
+    pid = running[0].pid
+    print(f"attaching to {running[0].name} ({running[0].identifier}), pid {pid}",
+          file=sys.stderr)
+elif apps:
+    sys.exit(f"{apps[0].name} ({apps[0].identifier}) is installed but not running. "
+             "Open it, log in, and leave it in the foreground.")
+else:
+    # Fallback for frida-servers that don't list applications.
+    procs = dev.enumerate_processes()
+    matches = [p for p in procs if p.name.strip().casefold() == want]
+    if not matches:
+        names = sorted({p.name for p in procs})
+        sys.exit(f"app {APP_NAME!r} not found. Running processes:\n  " + "\n  ".join(names))
+    if len(matches) > 1:
+        print(f"warning: {len(matches)} processes named {APP_NAME!r} "
+              f"(pids {[p.pid for p in matches]}); using the lowest pid. If the dump is "
+              "empty, pass the package id instead.", file=sys.stderr)
+    pid = min(p.pid for p in matches)
 
 session = dev.attach(pid)
 
 # The hook. Two phases:
 #   1. enumerateLoadedClasses -> collect every class named *DeviceBean.
 #   2. for each, Java.choose -> walk the live instances and call the getters.
+#      The app often holds several copies of the same device (list, cache, detail
+#      screen), so rows are merged by devId: one row per device, `instances` = copies.
 # getLocalKey() is the prize; the others help you line each key up with the right
 # device (id, IP, product id) so you don't guess which key is which.
 JS = r"""
@@ -105,29 +124,63 @@ Java.perform(function () {
   });
   send({ classes: classes });
 
-  var out = [];
+  var byId = {};
+  var order = [];
   classes.forEach(function (name) {
     Java.choose(name, {
       onMatch: function (inst) {
         var row = { cls: name };
         ['getDevId', 'getName', 'getLocalKey', 'getProductId', 'getUuid', 'getMac', 'getIp']
           .forEach(function (m) {
-            try { row[m] = '' + inst[m](); } catch (e) {}
+            try {
+              var v = inst[m]();
+              if (v !== null && v !== undefined && ('' + v) !== '') row[m] = '' + v;
+            } catch (e) {}
           });
-        out.push(row);
+        var id = row.getDevId || (name + '|' + (row.getLocalKey || order.length));
+        var seen = byId[id];
+        if (!seen) {
+          row.instances = 1;
+          byId[id] = row;
+          order.push(id);
+          return;
+        }
+        seen.instances += 1;
+        // Fill gaps from later copies; flag a copy that disagrees on the key.
+        Object.keys(row).forEach(function (k) {
+          if (k === 'cls') return;
+          if (seen[k] === undefined) seen[k] = row[k];
+          else if (k === 'getLocalKey' && seen[k] !== row[k]) {
+            seen.otherLocalKeys = seen.otherLocalKeys || [];
+            if (seen.otherLocalKeys.indexOf(row[k]) < 0) seen.otherLocalKeys.push(row[k]);
+          }
+        });
       },
       onComplete: function () {}
     });
   });
+  var out = order.map(function (id) { return byId[id]; });
   send({ devices: out });
 });
 """
 
+done = threading.Event()
+
+
+def on_message(msg, data):
+    payload = msg.get("payload", msg)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    if msg.get("type") == "error" or (isinstance(payload, dict) and "devices" in payload):
+        done.set()
+
+
 script = session.create_script(JS)
-script.on("message", lambda msg, data: print(
-    json.dumps(msg.get("payload", msg), ensure_ascii=False, indent=2)
-))
+script.on("message", on_message)
 script.load()
 
-# Give Java.choose time to walk the heap before we detach.
-time.sleep(8)
+# Java.choose walks the whole heap; on a slow emulator that can take a while. Wait for
+# the "devices" message itself rather than a fixed delay.
+if not done.wait(timeout=60):
+    print("timeout: no device list after 60 s. Is the app in the foreground with its "
+          "devices loaded?", file=sys.stderr)
+session.detach()

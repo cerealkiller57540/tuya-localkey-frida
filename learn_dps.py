@@ -20,6 +20,14 @@ Two modes:
   # watch: just stream every change with a timestamp, Ctrl-C to stop
   python learn_dps.py --watch
 
+  # poll: for firmwares that never push (common on AC modules), read status()
+  # every N seconds and diff instead of waiting for pushes. Combines with --watch.
+  python learn_dps.py --poll        # every 1 s
+  python learn_dps.py --watch --poll 2
+
+  # protocol version: 3.3 by default; try 3.4 / 3.5 if status() gives Error 905
+  python learn_dps.py --version 3.4
+
 Requirements:  pip install tinytuya ; export TUYA_KEY=...  (never hard-code it)
 
 How it connects: same as verify_lan.py — straight to the device on the LAN via
@@ -35,15 +43,23 @@ IR/physical remote (which uses no LAN socket) while this runs; if you use the ap
 instead, close it first — otherwise the two fight over the device.
 """
 import os
-import sys
 import time
+import argparse
 import tinytuya
 
 DEV_ID = "<DEV_ID_FROM_DUMP>"
 DEV_IP = "<DEVICE_LAN_IP>"     # the device's LAN IP (192.168.x.x), NOT the dump's getIp
-VERSION = 3.3                 # try 3.4 / 3.5 if 3.3 fails
 
-WATCH = "--watch" in sys.argv
+ap = argparse.ArgumentParser(description="Learn what each Tuya DPS does by watching it change.")
+ap.add_argument("--watch", action="store_true", help="stream every change, Ctrl-C to stop")
+ap.add_argument("--poll", nargs="?", type=float, const=1.0, default=None, metavar="SECONDS",
+                help="read status() every SECONDS (default 1) instead of waiting for pushes")
+ap.add_argument("--version", type=float, default=float(os.environ.get("TUYA_VERSION", 3.3)),
+                choices=[3.1, 3.2, 3.3, 3.4, 3.5],
+                help="Tuya protocol version (default 3.3, or $TUYA_VERSION)")
+ARGS = ap.parse_args()
+WATCH = ARGS.watch
+POLL = ARGS.poll
 
 
 def need(value, env, prompt):
@@ -68,13 +84,31 @@ def connect():
     dev_id = need(DEV_ID, "DEV_ID", "Device id (getDevId from the dump): ")
     dev_ip = need(DEV_IP, "DEV_IP", "Device LAN IP (192.168.x.x, NOT the dump's getIp): ")
     key = need(None, "TUYA_KEY", "Local key (getLocalKey): ")
-    d = tinytuya.Device(dev_id, dev_ip, key, version=VERSION)
+    d = tinytuya.Device(dev_id, dev_ip, key, version=ARGS.version)
     d.set_socketPersistent(True)   # keep the socket open so pushes arrive
     return d
 
 
+def poll(d, state, timeout):
+    """Polling mode: call status() every POLL seconds until timeout; update state."""
+    moved = {}
+    deadline = time.time() + timeout
+    while True:
+        msg = d.status()
+        if msg and "dps" in msg:
+            moved.update(diff(state, msg["dps"]))
+            state.update(msg["dps"])
+        elif msg and "Error" in msg:
+            print("  status() error:", msg)
+        if time.time() + POLL > deadline:
+            return moved
+        time.sleep(POLL)
+
+
 def drain(d, state, timeout=1.0):
     """Read whatever the device pushes until it goes quiet; update state in place."""
+    if POLL:
+        return poll(d, state, timeout)
     moved = {}
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -92,7 +126,8 @@ def main():
     print("baseline dps:", state)
 
     if WATCH:
-        print("watching — operate the device, Ctrl-C to stop")
+        how = f"polling every {POLL:g} s" if POLL else "listening for pushes"
+        print(f"watching ({how}) — operate the device, Ctrl-C to stop")
         try:
             while True:
                 moved = drain(d, state, timeout=5.0)
@@ -112,7 +147,8 @@ def main():
                 break
             drain(d, state, timeout=0.3)      # flush anything stale first
             input(f"  do '{label}' now, then press Enter...")
-            moved = drain(d, state, timeout=1.5)
+            # A poll needs at least two reads after the change to catch a slow update.
+            moved = drain(d, state, timeout=max(1.5, 2 * POLL) if POLL else 1.5)
             print(f"  -> moved: {moved or 'nothing (try again / slower)'}")
             for dps, (_, after) in moved.items():
                 table.setdefault(dps, []).append(f"{label}={after}")

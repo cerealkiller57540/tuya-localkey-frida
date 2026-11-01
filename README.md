@@ -269,11 +269,15 @@ so get to the screen where you can see it before dumping.
 ### 3. Dump the key
 
 With the app in the **foreground**, run [`dump_localkey.py`](dump_localkey.py) and pass
-the app's visible process name:
+the app's visible name or its package id:
 
 ```bash
 python dump_localkey.py "<App display name>"
+python dump_localkey.py com.vendor.app      # same thing, by package id
 ```
+
+It attaches to the app's **main** process (the one that holds the devices), not to a
+side process with the same name, and waits for the result instead of a fixed delay.
 
 The script re-posts the `adb forward` for the frida port itself (removing any stale
 one first), so you can re-run it as often as you like without the `Address already in
@@ -291,11 +295,17 @@ You'll get the list of `*DeviceBean` classes it found, then a row per live devic
       "getName": "<Device name>",
       "getLocalKey": "<THIS IS THE LOCAL KEY>",
       "getProductId": "<product id>",
-      "getIp": "<device LAN IP>"
+      "getIp": "<device LAN IP>",
+      "instances": 3
     }
   ]
 }
 ```
+
+The app usually keeps several copies of the same device in memory; the script merges
+them into one row per `getDevId` and `instances` says how many it saw. If two copies
+disagree on the key (rare: a key that rotated during the session), the other one is
+listed in `otherLocalKeys` — test both in step 4.
 
 `getLocalKey` is what you came for. `getDevId` and `getIp` let you match each key to
 the right device when you have several.
@@ -341,7 +351,8 @@ python verify_lan.py <DEV_ID> <DEV_IP>
 ```
 
 A `{'dps': {...}}` dict means success. `Error 905` almost always means a wrong key or
-the wrong protocol `version` (try `3.4` / `3.5` if `3.3` fails); `Err 901` is a network
+the wrong protocol version (default `3.3`; retry with `--version 3.4` or `--version 3.5`,
+or set `TUYA_VERSION`); `Err 901` is a network
 problem — wrong IP (see above), or the device is on a VLAN your PC can't reach.
 
 ### 5. (Method, not solution) Map the DPS — by watching, not writing
@@ -365,13 +376,19 @@ python learn_dps.py
 
 # or just stream every change with a timestamp (Ctrl-C to stop)
 python learn_dps.py --watch
+
+# device never pushes? poll status() instead (every 1 s, or give a number)
+python learn_dps.py --watch --poll 2
+
+# same --version flag as verify_lan.py
+python learn_dps.py --version 3.4
 ```
 
 **How it connects (and why the remote matters).** `learn_dps.py` talks to the device
 exactly like `verify_lan.py` in step 4 — straight to it on the LAN with `tinytuya`,
 using the same three things from the dump (`DEV_ID`, `DEV_IP`, and `TUYA_KEY` from the
 environment). No cloud is involved. It opens a TCP connection to the device on Tuya's
-local port (6668); the `local_key` encrypts that conversation (protocol 3.3).
+local port (6668); the `local_key` encrypts that conversation (protocol 3.3 by default, `--version` to change it).
 
 The one line that makes it a *listener* rather than a one-shot read is
 `set_socketPersistent(True)`: `verify_lan.py` opens the socket, reads the state once,
@@ -393,9 +410,8 @@ the device's own buttons, or writing to a dps from the PC (next paragraph).
 >
 > - **The device doesn't push.** Some firmwares (several AC/climate modules especially)
 >   never send a spontaneous update — `--watch` just sits on a frozen baseline no matter
->   what you do. These you **poll** instead: read `status()` on a short loop and diff. A
->   ready-made `poll_dps.py` isn't in this repo, but it's ten lines around
->   `tinytuya.Device(...).status()` in a `while True: time.sleep(1)`.
+>   what you do. These you **poll** instead: add `--poll` (works with `--watch` and in
+>   interactive mode) and the script reads `status()` every second and diffs.
 > - **An IR/RF remote is "blind."** A remote that talks to the *appliance* over infrared
 >   (not to the Tuya Wi-Fi module) can change what the unit does without the Tuya module
 >   ever learning about it — so neither `--watch` nor polling sees a thing. Change the
